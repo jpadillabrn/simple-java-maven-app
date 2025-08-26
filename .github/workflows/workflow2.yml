@@ -1,0 +1,113 @@
+---
+name: Workflow manual
+
+on:
+  # Este workflow se ejecuta manualmente
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Construir proyecto
+    runs-on: ubuntu-latest
+    # Declaro dos outputs creados por el step "ver-info"
+    # que son "nombre" y "version"
+    outputs:
+      nombre: ${{ steps.ver-info.outputs.nombre }}
+      version: ${{ steps.ver-info.outputs.version }}
+    steps:
+      - name: Checkout de repositorio
+        uses: actions/checkout@v4
+
+      # Descargar Oracle Java 21 y configurarlo para que
+      # use la cache de Maven
+      - name: Instalar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: oracle
+          java-version: 21
+          cache: maven
+
+      # Descargo la version minima de Maven requerida
+      # por el proyecto
+      - name: Instalar Maven
+        uses: hb0730/maven-action@v1
+        with:
+          maven-version: 3.9.3
+
+      # Construyo el proyecto sin realizar pruebas
+      - name: Compilar
+        run: mvn -B -DskipTests clean package
+
+      # Obtengo el nombre y version del proyecto construido
+      # Ambos los guardo como "outputs" de GitHub para poder
+      # ser reutilizados en un step o job posterior
+      - name: Obtener nombre y version de artefacto
+        id: ver-info
+        run: |
+          nombre=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.name)
+          version=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)
+          echo "nombre=$nombre" >>$GITHUB_OUTPUT
+          echo "version=$version" >>$GITHUB_OUTPUT
+
+      # Solo el directorio target lo guardo como artefacto
+      - name: Guardar artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: artefacto-java
+          retention-days: 1
+          path: |
+            target
+
+  test:
+    name: Realizar pruebas
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    steps:
+      - name: Checkout de repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: oracle
+          java-version: 21
+          cache: maven
+
+      - name: Set up Maven
+        uses: hb0730/maven-action@v1
+        with:
+          maven-version: 3.9.3
+
+      # Descargo el artefacto antes creado que contiene
+      # al directorio target/
+      - name: Descargar artefacto
+        uses: actions/download-artifact@v4
+        with:
+          name: artefacto-java
+
+      # Realizo las pruebas del proyecto con Maven
+      - name: Probar
+        run: mvn test
+
+  exe:
+    name: Ejecutar artefacto
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - test
+    steps:
+      - name: Descargar artefacto
+        uses: actions/download-artifact@v4
+        with:
+          name: artefacto-java
+
+      # Luego de descargar el artefacto que contiene al
+      # archivo .jar, lo ejecuto
+      # El nombre del .jar se obtiene del valor de los
+      # outputs "nombre" y "version" creados en el job build
+      - name: Ejecutar .jar
+        env:
+          NOMBRE: ${{ needs.build.outputs.nombre }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: java -jar "${NOMBRE}-${VERSION}.jar"
